@@ -100,17 +100,51 @@ RFC 8878 帧头规格精确切帧（不靠 magic 扫描，因为 magic 字节可
 
 未知配置键会**抛错**而非静默忽略，避免拼写错误被默认值掩盖。
 
+## 环境要求
+
+- **Node.js `^22.15.0 || >=23.8.0`** —— 会话日志是多帧 zstd 容器，解压依赖
+  `zlib.zstdDecompressSync`。该 API 在 Node **23.8.0** 上游加入、并回移到 **22.15.0** LTS，
+  因此 **23.0–23.7 这一段没有它**，范围不能简写成 `>=22`。同一个范围也写在
+  `package.json` 的 `engines.node`，且有测试锁定两处一致。
+  缺这个 API 时插件**不会**把用量显示成 0：`readZstdLines` 直接抛错，`scan()` 返回带原因的
+  `fatal`，启动日志与 `/api/health` 都会说明——静默的 0 会被误读成「今天没用过」，最难排查。
+- **DSH `0.1.5-rc.2`** 线（见 `package.json` 的 `dshTarget`），且 `dsh` CLI 支持 profile
+  与 `dsh plugin`——本插件依托 profile/bundle 机制安装。
+- **零第三方运行时依赖**：只 import Node 内置模块，不 import 任何 `@deepseek-ai/*`。
+  好处是插件与宿主版本解耦——宿主升级只要不破坏[契约依赖](#harness-契约依赖)就仍能工作。
+- **数据前提**：harness home 下存在 `sessions/` 目录（DSH 正常使用过就有）。不存在时
+  `/api/health` 回报 `sessionsRootExists: false`，仪表盘显示空数据而非报错。
+- **可选能力**（缺了不影响加载，只是少了对应入口）：`/tokens` 命令需要宿主挂载 `commands`
+  服务，`token_usage` 工具需要 `tools` 服务，仪表盘与徽标需要 `webServer` 服务。
+
 ## 安装
 
-```sh
-dsh plugin --profile web add file:<绝对路径>/dsh-token-ledger
-```
-
-安装后需重启 dsh。验证：
+包位于仓库根，无构建步骤，从 GitHub 直接装：
 
 ```sh
-curl http://127.0.0.1:<port>/dsh-token-ledger/api/health
+dsh plugin --profile web add github:doremifaso12345/dsh-token-ledger
 ```
+
+把 `web` 换成你要装的 profile 名。装完重启 `dsh web`。
+
+本地开发用 `link:`，路径**由 shell 展开**而不是写死——写死的绝对路径对别人没有意义，
+而相对路径会被 pnpm 解析到 **profile 目录**而非当前目录（所以 `link:../dsh-token-ledger`
+这种写法会失败）：
+
+```sh
+# 在本仓库目录内执行
+dsh plugin --profile web add "link:$(pwd)"     # bash / zsh / PowerShell
+dsh plugin --profile web add "link:%CD%"       # cmd.exe
+```
+
+验证安装（端口换成 `dsh web` 实际监听的）：
+
+```sh
+curl http://127.0.0.1:PORT/dsh-token-ledger/api/health
+```
+
+这个响应同时回报数据根、会话目录是否存在，以及 Node 的 zstd 能力——
+「为什么数字全是 0」通常一个请求就能定位。
 
 ## HTTP 端点
 
@@ -141,6 +175,8 @@ node test/client.test.mjs      # 客户端半：真实 react 渲染两个组件
 node test/regression.test.mjs  # 回归：服务缺席/部分可用时不得抛错
 node test/render.test.mjs      # jsdom 真实挂载：验证异步数据到手后的仪表盘
 node test/installed.test.mjs   # 安装副本：profile 里那一份的端到端
+node test/profile.test.mjs     # profile 装配：bundle 声明与补丁层解析
+node test/env.test.mjs         # 环境契约：Node 版本范围语义与 zstd 守卫
 ```
 
 `render.test.mjs` 值得单说：`react-dom/server` 的静态渲染**不执行 `useEffect`**，
@@ -151,6 +187,40 @@ node test/installed.test.mjs   # 安装副本：profile 里那一份的端到端
 `ledger.test.mjs` 第 6 组是**一致性测试**：把日志折叠到投影缓存的 `seq` 水位线，
 再与官方 `tokenUsage.val.totals` 逐字段比对。跳过水位线会误报——活跃会话的日志与缓存
 同时推进，两次读取之间存在写入窗口。
+
+`env.test.mjs` 用真实 `semver` 验证版本范围确实排除了没有 zstd 的 23.0–23.7，
+并断言 `package.json` 的 `engines` 与代码常量一致。这两处曾漂移过一次（原先写 `>=18`）。
+
+## Harness 契约依赖
+
+锚定 **`dshTarget` = `0.1.5-rc.2`**。本插件依赖的是下面这些接缝，而不是宿主的公开版本号——
+宿主升级时按这份清单核对，比看版本号更可靠：
+
+- **`ctx.inject([...], cb)`**（Cordis）：`ctx` 是 Proxy，读**未声明**的服务属性会**立即抛错**
+  （`cannot get property "x" without inject`），并在 apply 阶段被记为 fiber 失败。三面注册
+  因此都走 `inject`，服务缺席时只是那一面不注册。**这是曾经让 DSH 起不来的那个坑**
+  （见[启动故障与修复](#启动故障与修复101)）。
+- **`webServer.register({ kind: 'prefix', path, handler })`**：挂 `/dsh-token-ledger/*` 路由。
+- **`commands.register({ name, description, input, handler })`**，handler 返回
+  `{ kind: 'success' | 'error', text }`：`/tokens` 命令。
+- **`tools.register({ name, description, parameters, output: { schema, render }, execute })`**：
+  `token_usage` 工具（原 JSON-Schema 工具定义，避免与宿主版本耦合）。
+- **客户端 `window.__ModuleLoader__.load({ id, factory })`**：factory 用 `require("react")`，
+  导出 `name` / `inject` / `apply`。bundle 自带的 `exports.inject = ['slots', 'locale']`
+  是**真实的客户端服务名**，必须存在；而 `package.json` 里 `dsh.client.inject` 只是模块图排序提示。
+- **两个 list 槽位**：`settings.section`（由 `dsh-client-ui-settings-general` 在其
+  `sidebar.settings` 子树中声明）与 `conversation.input.dock`（由 `dsh-client-ui-conversation`
+  声明，scope 为 session）。注册需要 `id` / `order`，`settings.section` 还需要 `label`。
+- **`ctx.locale.register(ns, dict)` / `ctx.locale.bind(ns)`**：中英文案。
+- **数据格式契约**（比 API 更容易变）：会话日志位于
+  `sessions/<workspace>/<session>/session.v3.jsonl.zstd`，是**多帧 zstd 容器**，
+  每行事件的 `version` 为 3；用量在 `assistant/message` 事件的 `data.usage` 里
+  （`inputTokens` / `outputTokens` / `totalTokens` / `cacheReadTokens`）。
+- **投影缓存格式**（仅一致性测试用）：`storages/session_projcache/sessions/*.json` 的
+  `record.rows.tokenUsage.val.totals` 与 `seq` 水位线。
+
+刻意不依赖的：宿主的 `tokenUsage` 投影本身（缓存是派生数据、可能滞后，插件直接读日志）、
+以及任何 `@deepseek-ai/*` 包的 import——所以插件在宿主大版本更新时更可能继续可用。
 
 ## 热力图两处 CSS 缺陷与修复（1.0.4）
 

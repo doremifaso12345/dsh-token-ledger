@@ -1,6 +1,6 @@
 {
   "name": "dsh-token-ledger",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Token 账本：按本地日期监控 DSH 的每日 token 消耗（未缓存输入/缓存读取/输出），带设置页卡片、输入框徽标、/tokens 命令与 token_usage 模型工具。",
   "type": "module",
   "main": "lib/index.js",
@@ -28,7 +28,7 @@
   "dsh": {
     "id": "dsh-token-ledger",
     "name": "Token 账本",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
@@ -42,7 +42,7 @@
     }
   },
   "engines": {
-    "node": ">=18"
+    "node": "^22.15.0 || >=23.8.0"
   },
   "dshTarget": "0.1.5-rc.2"
 }
