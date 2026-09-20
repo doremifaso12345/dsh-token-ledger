@@ -1,0 +1,13 @@
+# dsh-token-ledger bundle patch：把插件插入 profile 的层栈。
+#
+# 只需一条 insert。插件的宿主半自行用 ctx.inject(['webServer']) 注册 HTTP 路由，
+# 用 ctx.get('commands') 注册聊天命令，因此这里不依赖任何既有行的 id，
+# 也不会与其他插件争抢座位。
+- insert:
+    - id: dsh-token-ledger
+      name: 'dsh-token-ledger'
+      config:
+        enabled: true
+        # 结果缓存时长（毫秒）。徽标每 60s 轮询一次，账本内部按文件
+        # (mtime, size) 增量复用折叠结果，这里再加一层短 TTL 避免频繁目录扫描。
+        cacheTtlMs: 5000

@@ -1,0 +1,21 @@
+# 依赖（插件本身零依赖，这里只是防止将来误提交）
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+
+# 测试产物（render.test.mjs 会导出渲染快照，落到系统临时目录，
+# 但以防有人改成本地路径）
+*.rendered.html
+.dsh-token-ledger-*
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 日志
+*.log
